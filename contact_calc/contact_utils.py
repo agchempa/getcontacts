@@ -577,6 +577,51 @@ def is_sp(molid, atom1, atom2, atom3):
     angle = compute_angle(molid, 0, atom1, atom2, atom3)
     return (180. - 5) < angle and angle < (180. + 5)
 
+class bfs_node:
+    def __init__(self, label, parent = None):
+        self.label = label
+        self.parent = parent
+
+def extract_rings(ligand_indices, index_to_neighbors):
+    cycles = []
+    # set of VMD indices of atoms that haven't been visited yet
+    unvisited = set(ligand_indices)
+    # dict from VMD index of visited atom -> VMD index of parent
+    visited = {}
+
+    # keep running bfs until there are no unvisited nodes
+    while len(unvisited) > 0:
+        seed_node = list(unvisited)[0]
+        queue = [bfs_node(seed_node)]
+        unvisited.remove(seed_node)
+        visited[seed_node] = []
+
+        # run bfs
+        while len(queue) > 0:
+            curr_node = queue[0]
+            queue = queue[1:]
+            for neighbor in index_to_neighbors[curr_node]:
+                if neighbor in visited:
+                    # Found a cycle!
+                    branch_node = None
+
+                    for i in range(len(visited[neighbor])):
+                        if visited[neighbor][i] == visited[curr_node][i]:
+                            branch = visited[curr_node][i]
+                        else:
+                            break
+
+                    cycle = set(visited[neighbor][i:] + visited[curr_node][i:] + [branch_node])
+                    cycles.append(cycle)
+                    print("found a cycle")
+                else:
+                    unvisited.remove(neighbor)
+                    visited[neighbor] = visited[curr_node] + [curr_node]
+                    queue += [bfs_node(neighbor)]
+            # do something
+
+    return cycles
+
 def extract_ligand_features(top, traj, index_to_atom):
     """
     Extracts lists of cationc and anionic atoms identified in the ligand
@@ -606,10 +651,17 @@ def extract_ligand_features(top, traj, index_to_atom):
     ''' Find all neighbors '''
     index_to_neighbors = {}
     for atom_idx in ligand_indices:
-        # print("Atom idx {}, element {}".format(atom_idx, index_to_atom[atom_idx].element))
         evaltcl("set neighbors [atomselect %s \"within 1.95 of (index %d)\" frame %s]" % (molid, atom_idx, 0))
         neighbor_indices = [idx for idx in get_atom_selection_indices("neighbors") if idx != atom_idx]
         evaltcl("$neighbors delete")
+        
+        print("Atom idx {}, element {}".format(atom_idx, index_to_atom[atom_idx].element))
+        print(neighbor_indices)
+
+    cycles = extract_rings(ligand_indices, index_to_neighbors)
+    for cycle in cycles:
+        print(cycle)
+    exit(0)
 
     ''' Identify ligand cations/anions '''
     for atom_idx in ligand_indices:
