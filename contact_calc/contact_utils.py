@@ -577,13 +577,8 @@ def is_sp(molid, atom1, atom2, atom3):
     angle = compute_angle(molid, 0, atom1, atom2, atom3)
     return (180. - 5) < angle and angle < (180. + 5)
 
-class bfs_node:
-    def __init__(self, label, parent = None):
-        self.label = label
-        self.parent = parent
-
 def extract_rings(ligand_indices, index_to_neighbors):
-    cycles = []
+    cycles = set() 
     # set of VMD indices of atoms that haven't been visited yet
     unvisited = set(ligand_indices)
     # dict from VMD index of visited atom -> VMD index of parent
@@ -592,7 +587,7 @@ def extract_rings(ligand_indices, index_to_neighbors):
     # keep running bfs until there are no unvisited nodes
     while len(unvisited) > 0:
         seed_node = list(unvisited)[0]
-        queue = [bfs_node(seed_node)]
+        queue = [seed_node]
         unvisited.remove(seed_node)
         visited[seed_node] = []
 
@@ -601,26 +596,43 @@ def extract_rings(ligand_indices, index_to_neighbors):
             curr_node = queue[0]
             queue = queue[1:]
             for neighbor in index_to_neighbors[curr_node]:
+                # the parent isn't a new neighbor
+                if len(visited[curr_node]) > 0 and neighbor == visited[curr_node][-1]: continue 
+
                 if neighbor in visited:
                     # Found a cycle!
-                    branch_node = None
-
+                    branch_idx = 0
                     for i in range(len(visited[neighbor])):
-                        if visited[neighbor][i] == visited[curr_node][i]:
-                            branch = visited[curr_node][i]
-                        else:
+                        if visited[neighbor][i] != visited[curr_node][i]:
+                            branch_idx = i - 1
                             break
 
-                    cycle = set(visited[neighbor][i:] + visited[curr_node][i:] + [branch_node])
-                    cycles.append(cycle)
-                    print("found a cycle")
+                    cycle = frozenset(visited[neighbor][branch_idx:] + visited[curr_node][branch_idx:] + [curr_node, neighbor])
+                    cycles.add(cycle)
+                    # print("found a cycle, visited is {}, curr is {} and neighbor is {}".format(visited, curr_node, neighbor))
                 else:
                     unvisited.remove(neighbor)
                     visited[neighbor] = visited[curr_node] + [curr_node]
-                    queue += [bfs_node(neighbor)]
+                    queue += [neighbor]
             # do something
 
     return cycles
+
+def ring_is_planar(cycle, index_to_atom, molid):
+    cyclist = list(cycle)
+    atom0 = get_coord(molid, 0, index_to_atom[cyclist[0]].get_label())
+    atom1 = get_coord(molid, 0, index_to_atom[cyclist[1]].get_label())
+    atom2 = get_coord(molid, 0, index_to_atom[cyclist[2]].get_label())
+    normal1 = calc_geom_normal_vector(atom0, atom1, atom2)
+
+    # by choosing these atoms, 6 membered rings in chair conformation are eliminated
+    atom3 = get_coord(molid, 0, index_to_atom[cyclist[-4]].get_label())
+    atom4 = get_coord(molid, 0, index_to_atom[cyclist[-2]].get_label())
+    atom5 = get_coord(molid, 0, index_to_atom[cyclist[-3]].get_label())
+    normal2 = calc_geom_normal_vector(atom3, atom4, atom5)
+
+    angle = calc_angle_between_vectors(normal1, normal2)
+    return ((180 - 5) < angle and angle < (180 + 5)) or ((0 - 5) < angle and angle < (0 + 5))
 
 def extract_ligand_features(top, traj, index_to_atom):
     """
@@ -654,14 +666,15 @@ def extract_ligand_features(top, traj, index_to_atom):
         evaltcl("set neighbors [atomselect %s \"within 1.95 of (index %d)\" frame %s]" % (molid, atom_idx, 0))
         neighbor_indices = [idx for idx in get_atom_selection_indices("neighbors") if idx != atom_idx]
         evaltcl("$neighbors delete")
+        index_to_neighbors[atom_idx] = neighbor_indices
         
         print("Atom idx {}, element {}".format(atom_idx, index_to_atom[atom_idx].element))
         print(neighbor_indices)
 
     cycles = extract_rings(ligand_indices, index_to_neighbors)
     for cycle in cycles:
-        print(cycle)
-    exit(0)
+        if len(cycle) < 5: continue
+        if ring_is_planar(cycle, index_to_atom, molid):
 
     ''' Identify ligand cations/anions '''
     for atom_idx in ligand_indices:
